@@ -1,0 +1,67 @@
+stages:
+  data_ingestion:
+    cmd: python src/data_ingestion.py params.yaml
+    deps:
+      - src/data_ingestion.py
+      - data/raw/phone_addiction_dataset.csv
+    params:
+      - data_ingestion
+      - base
+    outs:
+      - data/processed/ingested_data.csv
+
+  data_validation:
+    cmd: python src/data_validation.py params.yaml
+    deps:
+      - src/data_validation.py
+      - data/processed/ingested_data.csv
+    params:
+      - data_validation
+      - base
+    outs:
+      - reports/validation_report.json
+
+  data_preprocessing:
+    cmd: python src/data_preprocessing.py params.yaml
+    deps:
+      - src/data_preprocessing.py
+      - data/processed/ingested_data.csv
+    params:
+      - data_preprocessing
+      - base
+    outs:
+      - data/processed/cleaned_data.csv
+      - data/processed/train.csv
+      - data/processed/test.csv
+      - models/preprocessor.joblib
+
+  model_training:
+    cmd: python src/model_training.py params.yaml
+    deps:
+      - src/model_training.py
+      - data/processed/train.csv
+      - models/preprocessor.joblib
+    params:
+      - model_training
+      - base
+    outs:
+      - models/model.joblib
+
+  model_evaluation:
+    cmd: python src/model_evaluation.py params.yaml
+    deps:
+      - src/model_evaluation.py
+      - data/processed/test.csv
+      - models/model.joblib
+      - models/preprocessor.joblib
+    params:
+      - model_evaluation
+      - base
+    metrics:
+      - reports/metrics.json:
+          cache: false
+    plots:
+      - reports/plots:
+          cache: false
+    outs:
+      - reports/predictions.csv

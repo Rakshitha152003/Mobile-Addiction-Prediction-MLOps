@@ -1,0 +1,186 @@
+schema: '2.0'
+stages:
+  data_ingestion:
+    cmd: python src/data_ingestion.py params.yaml
+    deps:
+    - path: data/raw/phone_addiction_dataset.csv
+      hash: md5
+      md5: 5093956ff225df7d507ab0af0215ec78
+      size: 595229
+    - path: src/data_ingestion.py
+      hash: md5
+      md5: b2ca018dae55c615f78a8de0e5698156
+      size: 2314
+    params:
+      params.yaml:
+        base:
+          project_name: Mobile_Addiction_Ml_lops
+          random_state: 42
+          target_column: Addiction_Level
+        data_ingestion:
+          raw_data_path: data/raw/phone_addiction_dataset.csv
+          ingested_data_path: data/processed/ingested_data.csv
+    outs:
+    - path: data/processed/ingested_data.csv
+      hash: md5
+      md5: f681106acb36fd74bbe1cf867ca8a83e
+      size: 614903
+  data_validation:
+    cmd: python src/data_validation.py params.yaml
+    deps:
+    - path: data/processed/ingested_data.csv
+      hash: md5
+      md5: f681106acb36fd74bbe1cf867ca8a83e
+      size: 614903
+    - path: src/data_validation.py
+      hash: md5
+      md5: ac00d440745f905e1cea3351afda7589
+      size: 4682
+    params:
+      params.yaml:
+        base:
+          project_name: Mobile_Addiction_Ml_lops
+          random_state: 42
+          target_column: Addiction_Level
+        data_validation:
+          ingested_data_path: data/processed/ingested_data.csv
+          report_path: reports/validation_report.json
+          min_target_value: 1.0
+          max_target_value: 10.0
+    outs:
+    - path: reports/validation_report.json
+      hash: md5
+      md5: c540e04f700905ae2765265c00b3aeb2
+      size: 1167
+  data_preprocessing:
+    cmd: python src/data_preprocessing.py params.yaml
+    deps:
+    - path: data/processed/ingested_data.csv
+      hash: md5
+      md5: f681106acb36fd74bbe1cf867ca8a83e
+      size: 614903
+    - path: src/data_preprocessing.py
+      hash: md5
+      md5: 52d15d16e6106bf7ff4a37a4ec60c09c
+      size: 6288
+    params:
+      params.yaml:
+        base:
+          project_name: Mobile_Addiction_Ml_lops
+          random_state: 42
+          target_column: Addiction_Level
+        data_preprocessing:
+          ingested_data_path: data/processed/ingested_data.csv
+          cleaned_data_path: data/processed/cleaned_data.csv
+          train_data_path: data/processed/train.csv
+          test_data_path: data/processed/test.csv
+          preprocessor_path: models/preprocessor.joblib
+          test_size: 0.2
+          random_state: 42
+          drop_columns:
+          - Name
+          - Location
+          categorical_columns:
+          - Gender
+          - Phone_Usage_Purpose
+    outs:
+    - path: data/processed/cleaned_data.csv
+      hash: md5
+      md5: a852138f7641ec115c2b356b64bfeae2
+      size: 611602
+    - path: data/processed/test.csv
+      hash: md5
+      md5: 0a0b13c88ed426d871cfa5b060ab5a5e
+      size: 90021
+    - path: data/processed/train.csv
+      hash: md5
+      md5: 586bf2ec855dcdfcd9d8940b6262b020
+      size: 358491
+    - path: models/preprocessor.joblib
+      hash: md5
+      md5: 871c4d2515970b2fa2fa0cd618099da5
+      size: 4055
+  model_training:
+    cmd: python src/model_training.py params.yaml
+    deps:
+    - path: data/processed/train.csv
+      hash: md5
+      md5: 586bf2ec855dcdfcd9d8940b6262b020
+      size: 358491
+    - path: models/preprocessor.joblib
+      hash: md5
+      md5: 871c4d2515970b2fa2fa0cd618099da5
+      size: 4055
+    - path: src/model_training.py
+      hash: md5
+      md5: 1e9fae490cb05a5cc6cb5db15b4e02f0
+      size: 4994
+    params:
+      params.yaml:
+        base:
+          project_name: Mobile_Addiction_Ml_lops
+          random_state: 42
+          target_column: Addiction_Level
+        model_training:
+          train_data_path: data/processed/train.csv
+          preprocessor_path: models/preprocessor.joblib
+          model_path: models/model.joblib
+          algorithm: RandomForestRegressor
+          params:
+            n_estimators: 100
+            max_depth: 10
+            min_samples_split: 5
+            random_state: 42
+    outs:
+    - path: models/model.joblib
+      hash: md5
+      md5: 95b54b01a23ee8f5c26ca8fe0ab35a46
+      size: 5715905
+  model_evaluation:
+    cmd: python src/model_evaluation.py params.yaml
+    deps:
+    - path: data/processed/test.csv
+      hash: md5
+      md5: 0a0b13c88ed426d871cfa5b060ab5a5e
+      size: 90021
+    - path: models/model.joblib
+      hash: md5
+      md5: 95b54b01a23ee8f5c26ca8fe0ab35a46
+      size: 5715905
+    - path: models/preprocessor.joblib
+      hash: md5
+      md5: 871c4d2515970b2fa2fa0cd618099da5
+      size: 4055
+    - path: src/model_evaluation.py
+      hash: md5
+      md5: 8db6dbcc4a784e7b5ee089c3b2d28610
+      size: 8053
+    params:
+      params.yaml:
+        base:
+          project_name: Mobile_Addiction_Ml_lops
+          random_state: 42
+          target_column: Addiction_Level
+        model_evaluation:
+          test_data_path: data/processed/test.csv
+          preprocessor_path: models/preprocessor.joblib
+          model_path: models/model.joblib
+          metrics_path: reports/metrics.json
+          predictions_path: reports/predictions.csv
+          plots_dir: reports/plots
+          mlflow_tracking_uri: sqlite:///mlflow.db
+          experiment_name: Mobile_Addiction_Prediction
+    outs:
+    - path: reports/metrics.json
+      hash: md5
+      md5: 986361713f6440a50c8ac7d56e893790
+      size: 89
+    - path: reports/plots
+      hash: md5
+      md5: 3a0291792627d0fe53eb2b531b354d37.dir
+      size: 249037
+      nfiles: 3
+    - path: reports/predictions.csv
+      hash: md5
+      md5: abc797538653bd887c2f5908a9f027e0
+      size: 51995

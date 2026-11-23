@@ -1,0 +1,50 @@
+base:
+  project_name: "Mobile_Addiction_Ml_lops"
+  random_state: 42
+  target_column: "Addiction_Level"
+
+data_ingestion:
+  raw_data_path: "data/raw/phone_addiction_dataset.csv"
+  ingested_data_path: "data/processed/ingested_data.csv"
+
+data_validation:
+  ingested_data_path: "data/processed/ingested_data.csv"
+  report_path: "reports/validation_report.json"
+  min_target_value: 1.0
+  max_target_value: 10.0
+
+data_preprocessing:
+  ingested_data_path: "data/processed/ingested_data.csv"
+  cleaned_data_path: "data/processed/cleaned_data.csv"
+  train_data_path: "data/processed/train.csv"
+  test_data_path: "data/processed/test.csv"
+  preprocessor_path: "models/preprocessor.joblib"
+  test_size: 0.2
+  random_state: 42
+  drop_columns:
+    - "Name"
+    - "Location"
+  categorical_columns:
+    - "Gender"
+    - "Phone_Usage_Purpose"
+
+model_training:
+  train_data_path: "data/processed/train.csv"
+  preprocessor_path: "models/preprocessor.joblib"
+  model_path: "models/model.joblib"
+  algorithm: "RandomForestRegressor"
+  params:
+    n_estimators: 100
+    max_depth: 10
+    min_samples_split: 5
+    random_state: 42
+
+model_evaluation:
+  test_data_path: "data/processed/test.csv"
+  preprocessor_path: "models/preprocessor.joblib"
+  model_path: "models/model.joblib"
+  metrics_path: "reports/metrics.json"
+  predictions_path: "reports/predictions.csv"
+  plots_dir: "reports/plots"
+  mlflow_tracking_uri: "sqlite:///mlflow.db"
+  experiment_name: "Mobile_Addiction_Prediction"
