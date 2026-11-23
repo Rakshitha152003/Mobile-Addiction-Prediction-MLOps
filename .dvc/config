@@ -1,3 +1,8 @@
 [core]
     analytics = false
     check_update = false
+    remote = s3remote
+['remote "mylocalremote"']
+    url = C:\dvc_remote_storage
+['remote "s3remote"']
+    url = s3://my-bucket/dvc-storage
