@@ -1,0 +1,32 @@
+# Git & DVC
+.git/
+.gitignore
+.dvc/cache/
+.dvc/tmp/
+*.lock
+
+# Python Virtual Environments & Cache
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Notebooks & IDEs
+.ipynb_checkpoints/
+notebooks/
+.vscode/
+.idea/
+
+# MLflow and Local Databases
+mlruns/
+mlflow.db*
+*.sqlite
+*.db
+
+# Logs & Temporary files
+logs/*.log
+*.log
+.DS_Store
+Thumbs.db

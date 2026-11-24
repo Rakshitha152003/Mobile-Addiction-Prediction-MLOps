@@ -1,0 +1,2 @@
+Age,Daily_Usage_Hours,Sleep_Hours,Interllectual_Performance,Social_Interactions,Exercise_Hours,Anxiety_Level,Depression_Level,Self_Esteem,Screen_Time_Before_Bed,Phone_Checks_Per_Day,Apps_Used_Daily,Time_on_Social_Media,Time_on_Gaming,Time_on_Education,Family_Communication,Weekend_Usage_Hours,Gender,Phone_Usage_Purpose,timestamp,predicted_class,predicted_value
+61,9.5,9.0,75,5,2.25,5,5,6,1.0,120,18,2.5,1.0,1.0,5,7.0,Female,Social Media,2026-11-24T16:58:39.562627,9.97,9.97
