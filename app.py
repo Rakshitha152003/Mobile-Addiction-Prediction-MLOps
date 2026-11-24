@@ -1,4 +1,4 @@
-"""Root entrypoint for Streamlit app."""
+"""Root entrypoint for Streamlit application (delegates to app/app.py)."""
 import sys
 from pathlib import Path
 

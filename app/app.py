@@ -44,8 +44,70 @@ st.set_page_config(
 
 @st.cache_resource
 def load_champion_model():
-    """Load the champion model and fitted preprocessor pipeline."""
+    """Load the champion model and preprocessor, with auto-train fallback for Streamlit Cloud."""
     if not MODEL_PATH.exists() or not PREPROCESSOR_PATH.exists():
+        # Streamlit Cloud fallback: auto-train model if raw dataset exists in git
+        raw_path = PROJECT_ROOT / "data" / "raw" / "phone_addiction_dataset.csv"
+        if raw_path.exists():
+            from sklearn.ensemble import RandomForestRegressor
+            from sklearn.preprocessing import OneHotEncoder, StandardScaler
+            from sklearn.compose import ColumnTransformer
+            from sklearn.model_selection import train_test_split
+            from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
+            df = pd.read_csv(raw_path)
+            df.columns = df.columns.str.strip().str.replace(" ", "_")
+            df = df.drop_duplicates().reset_index(drop=True)
+            cols_to_drop = [c for c in ["Name", "Location"] if c in df.columns]
+            if cols_to_drop:
+                df = df.drop(columns=cols_to_drop)
+
+            target_col = "Addiction_Level"
+            X = df.drop(columns=[target_col])
+            y = df[target_col]
+
+            cat_cols = ["Gender", "Phone_Usage_Purpose"]
+            num_cols = [c for c in X.columns if c not in cat_cols]
+
+            preprocessor = ColumnTransformer(
+                transformers=[
+                    ("num", StandardScaler(), num_cols),
+                    ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), cat_cols),
+                ],
+                remainder="passthrough",
+            )
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+            X_train_trans = preprocessor.fit_transform(X_train)
+            model = RandomForestRegressor(n_estimators=100, max_depth=10, min_samples_split=5, random_state=42)
+            model.fit(X_train_trans, y_train)
+
+            MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+            joblib.dump(model, MODEL_PATH)
+            joblib.dump(preprocessor, PREPROCESSOR_PATH)
+
+            # Generate fallback metrics if not present
+            METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            if not METRICS_PATH.exists():
+                X_test_trans = preprocessor.transform(X_test)
+                preds = model.predict(X_test_trans)
+                mse = mean_squared_error(y_test, preds)
+                metrics_data = {
+                    "rmse": round(float(np.sqrt(mse)), 4),
+                    "mae": round(float(mean_absolute_error(y_test, preds)), 4),
+                    "r2_score": round(float(r2_score(y_test, preds)), 4),
+                    "mse": round(float(mse), 4),
+                }
+                with open(METRICS_PATH, "w", encoding="utf-8") as f:
+                    json.dump(metrics_data, f, indent=4)
+
+            # Ensure baseline train split exists for drift monitoring tab
+            train_csv = PROJECT_ROOT / "data" / "processed" / "train.csv"
+            if not train_csv.exists():
+                train_csv.parent.mkdir(parents=True, exist_ok=True)
+                pd.concat([X_train, y_train], axis=1).to_csv(train_csv, index=False)
+
+            return model, preprocessor
         return None, None
     model = joblib.load(MODEL_PATH)
     preprocessor = joblib.load(PREPROCESSOR_PATH)
