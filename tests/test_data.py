@@ -2,7 +2,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from src.monitor_drift import FEATURE_COLUMNS, NUMERICAL_FEATURES, CATEGORICAL_FEATURES
+from src.monitor_drift import RAW_FEATURE_COLUMNS, NUMERICAL_FEATURES, CATEGORICAL_FEATURES
 
 RAW_DATA_PATH = Path("data/raw/phone_addiction_dataset.csv")
 TRAIN_DATA_PATH = Path("data/processed/train.csv")
@@ -17,7 +17,7 @@ def test_raw_dataset_exists_and_valid():
     df = pd.read_csv(RAW_DATA_PATH)
 
     assert len(df) == 6000, f"Expected 6000 rows in raw dataset, got {len(df)}"
-    for col in FEATURE_COLUMNS + [TARGET_COLUMN]:
+    for col in RAW_FEATURE_COLUMNS + [TARGET_COLUMN]:
         assert col in df.columns, f"Missing column {col} in raw data"
 
     # Verify target variable values
@@ -37,7 +37,7 @@ def test_preprocessed_splits_exist_and_consistent():
     total_rows = len(train_df) + len(test_df)
     assert total_rows == 5968, f"Expected 5968 deduplicated rows across splits, got {total_rows}"
 
-    for col in FEATURE_COLUMNS + [TARGET_COLUMN]:
+    for col in RAW_FEATURE_COLUMNS + [TARGET_COLUMN]:
         assert col in train_df.columns, f"Missing {col} in train set"
         assert col in test_df.columns, f"Missing {col} in test set"
 

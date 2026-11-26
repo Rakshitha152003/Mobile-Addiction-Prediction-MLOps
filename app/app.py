@@ -1,355 +1,277 @@
-"""Streamlit serving application for the Mobile Phone Addiction MLOps Pipeline.
+"""Streamlit serving application for the Mobile Usage Addiction Prediction MLOps Pipeline.
 
 Features:
-- Live model inference with risk level and addiction score visualization.
-- Production payload and prediction logging for data drift tracking.
-- Interactive model metadata and lineage inspector.
-- Real-time data drift monitoring dashboard.
+- Live model inference with dynamic behavioral feature engineering and risk scoring.
+- Production payload and prediction logging for real-time data drift monitoring.
+- Model lineage, Optuna trials, and multi-criteria champion benchmark inspector.
+- Kolmogorov-Smirnov statistical data drift monitoring dashboard.
 """
 import sys
 from pathlib import Path
 
-# Ensure project root is in sys.path before importing local packages
-PROJECT_ROOT = Path(__file__).resolve().parent.parent if (Path(__file__).resolve().parent.parent / "models").exists() else Path(__file__).resolve().parent
+# Add project root to sys.path
+PROJECT_ROOT = Path(__file__).resolve().parent if (Path(__file__).resolve().parent / "models").exists() else Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import json
 import joblib
+import numpy as np
 import pandas as pd
 import streamlit as st
 
 from src.monitor_drift import (
-    FEATURE_COLUMNS,
     INFERENCE_LOG_PATH,
     REFERENCE_DATA_PATH,
     analyze_drift,
     load_inference_logs,
     log_inference,
+    generate_sample_inferences,
 )
+from src.feature_engineering import engineer_features, SELECTED_FEATURES
 
-# Project paths
-MODEL_PATH = PROJECT_ROOT / "models" / "model.joblib"
-PREPROCESSOR_PATH = PROJECT_ROOT / "models" / "preprocessor.joblib"
+MODEL_PATH = PROJECT_ROOT / "models" / "model.pkl"
+SELECTION_PATH = PROJECT_ROOT / "reports" / "model_selection.json"
 METRICS_PATH = PROJECT_ROOT / "reports" / "metrics.json"
-VALIDATION_PATH = PROJECT_ROOT / "reports" / "validation_report.json"
-PLOTS_DIR = PROJECT_ROOT / "reports" / "plots"
 
 st.set_page_config(
-    page_title="Mobile Addiction MLOps Production Portal",
+    page_title="Mobile Addiction MLOps Production System",
     page_icon="📱",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
+
+st.markdown("""
+<style>
+    .metric-card {
+        background-color: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 1.25rem;
+        margin-bottom: 1rem;
+    }
+    .status-badge {
+        font-weight: 700;
+        padding: 0.25rem 0.75rem;
+        border-radius: 9999px;
+        display: inline-block;
+    }
+    .risk-high { background-color: #fee2e2; color: #dc2626; border: 1px solid #f87171; }
+    .risk-mod { background-color: #fef3c7; color: #d97706; border: 1px solid #fcd34d; }
+    .risk-low { background-color: #dcfce7; color: #16a34a; border: 1px solid #86efac; }
+</style>
+""", unsafe_allow_html=True)
 
 
 @st.cache_resource
 def load_champion_model():
-    """Load the champion model and preprocessor, with auto-train fallback for Streamlit Cloud."""
-    if not MODEL_PATH.exists() or not PREPROCESSOR_PATH.exists():
-        # Streamlit Cloud fallback: auto-train model if raw dataset exists in git
+    if not MODEL_PATH.exists():
+        # Streamlit Cloud auto-train fallback if model artifact not in git
         raw_path = PROJECT_ROOT / "data" / "raw" / "phone_addiction_dataset.csv"
         if raw_path.exists():
-            from sklearn.ensemble import RandomForestRegressor
-            from sklearn.preprocessing import OneHotEncoder, StandardScaler
-            from sklearn.compose import ColumnTransformer
-            from sklearn.model_selection import train_test_split
-            from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-
-            df = pd.read_csv(raw_path)
-            df.columns = df.columns.str.strip().str.replace(" ", "_")
-            df = df.drop_duplicates().reset_index(drop=True)
-            cols_to_drop = [c for c in ["Name", "Location"] if c in df.columns]
-            if cols_to_drop:
-                df = df.drop(columns=cols_to_drop)
-
-            target_col = "Addiction_Level"
-            X = df.drop(columns=[target_col])
-            y = df[target_col]
-
-            cat_cols = ["Gender", "Phone_Usage_Purpose"]
-            num_cols = [c for c in X.columns if c not in cat_cols]
-
-            preprocessor = ColumnTransformer(
-                transformers=[
-                    ("num", StandardScaler(), num_cols),
-                    ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), cat_cols),
-                ],
-                remainder="passthrough",
+            from sklearn.ensemble import GradientBoostingRegressor
+            df_raw = pd.read_csv(raw_path)
+            df_raw.columns = [c.lower() for c in df_raw.columns]
+            df_eng = engineer_features(df_raw)
+            X_tr = df_eng[SELECTED_FEATURES]
+            y_tr = df_raw["addiction_level"]
+            fallback_model = GradientBoostingRegressor(
+                n_estimators=100, max_depth=5, random_state=42
             )
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-            X_train_trans = preprocessor.fit_transform(X_train)
-            model = RandomForestRegressor(n_estimators=100, max_depth=10, min_samples_split=5, random_state=42)
-            model.fit(X_train_trans, y_train)
-
+            fallback_model.fit(X_tr, y_tr)
             MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-            joblib.dump(model, MODEL_PATH)
-            joblib.dump(preprocessor, PREPROCESSOR_PATH)
-
-            # Generate fallback metrics if not present
-            METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
-            if not METRICS_PATH.exists():
-                X_test_trans = preprocessor.transform(X_test)
-                preds = model.predict(X_test_trans)
-                mse = mean_squared_error(y_test, preds)
-                metrics_data = {
-                    "rmse": round(float(np.sqrt(mse)), 4),
-                    "mae": round(float(mean_absolute_error(y_test, preds)), 4),
-                    "r2_score": round(float(r2_score(y_test, preds)), 4),
-                    "mse": round(float(mse), 4),
-                }
-                with open(METRICS_PATH, "w", encoding="utf-8") as f:
-                    json.dump(metrics_data, f, indent=4)
-
-            # Ensure baseline train split exists for drift monitoring tab
-            train_csv = PROJECT_ROOT / "data" / "processed" / "train.csv"
-            if not train_csv.exists():
-                train_csv.parent.mkdir(parents=True, exist_ok=True)
-                pd.concat([X_train, y_train], axis=1).to_csv(train_csv, index=False)
-
-            return model, preprocessor
-        return None, None
-    model = joblib.load(MODEL_PATH)
-    preprocessor = joblib.load(PREPROCESSOR_PATH)
-    return model, preprocessor
+            joblib.dump(fallback_model, MODEL_PATH)
+            return fallback_model
+        return None
+    return joblib.load(MODEL_PATH)
 
 
 @st.cache_data
 def load_reports():
-    """Load evaluation metrics and validation reports."""
-    metrics, validation = None, None
+    selection, metrics = None, None
+    if SELECTION_PATH.exists():
+        with open(SELECTION_PATH, "r", encoding="utf-8") as f:
+            selection = json.load(f)
     if METRICS_PATH.exists():
         with open(METRICS_PATH, "r", encoding="utf-8") as f:
             metrics = json.load(f)
-    if VALIDATION_PATH.exists():
-        with open(VALIDATION_PATH, "r", encoding="utf-8") as f:
-            validation = json.load(f)
-    return metrics, validation
+    return selection, metrics
 
 
-def get_risk_info(score: float):
-    """Categorize addiction score into risk levels."""
-    if score >= 7.5:
-        return "HIGH ADDICTION RISK", "red", "🔴"
-    elif score >= 4.5:
-        return "MODERATE RISK", "orange", "🟡"
-    return "LOW RISK / HEALTHY", "green", "🟢"
+model = load_champion_model()
+selection, metrics = load_reports()
 
-
-# -----------------------------------------------------------------------------
-# Sidebar: MLOps Model Lineage & System Info
-# -----------------------------------------------------------------------------
-model, preprocessor = load_champion_model()
-metrics, validation = load_reports()
-
+# Sidebar: System Metadata
 with st.sidebar:
-    st.title("📱 MLOps Platform")
-    st.caption("Automated Champion Model Serving")
+    st.image("https://img.icons8.com/fluency/96/smartphone-tablet.png", width=64)
+    st.title("📱 MLOps Monitor")
+    st.caption("Production Mobile Addiction Serving")
 
-    st.subheader("🏆 Active Champion")
-    st.info("**Model:** RandomForestRegressor")
-
-    if metrics:
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.metric("Test R²", f"{metrics.get('r2_score', 0.0):.3f}")
-            st.metric("RMSE", f"{metrics.get('rmse', 0.0):.3f}")
-        with col_b:
-            st.metric("MAE", f"{metrics.get('mae', 0.0):.3f}")
-            st.metric("MSE", f"{metrics.get('mse', 0.0):.3f}")
-
-        with st.expander("Selection Rationale"):
-            st.write(
-                "Selected via DVC pipeline with 100 decision trees, evaluated on "
-                "1,194 unseen test records, achieving 94.05% explained variance (R²)."
-            )
+    if selection and "champion" in selection:
+        champ = selection["champion"]
+        st.success(f"**Champion Model:**\n{champ['display_name']}")
+        st.markdown(f"**Validation $R^2$:** `{champ['criteria']['validation_r2_pct']:.2f}%`")
+        st.markdown(f"**Overfitting Gap:** `{champ['criteria']['r2_gap_pct']:.2f} pp`")
+        st.markdown(f"**Model Size:** `{champ['criteria']['model_size_mb']:.3f} MB`")
     else:
-        st.warning("Model metrics not found. Run `dvc repro` to build.")
+        st.warning("Model selection metadata not found.")
 
     st.divider()
-    st.subheader("📡 Live Monitoring")
-    log_df = load_inference_logs(INFERENCE_LOG_PATH)
-    st.metric("Logged Inferences", len(log_df))
+    st.caption("DVC Pipeline & Drift Monitoring Engine")
+    st.caption("Target Bounded Scale: 1.0 (Low) to 10.0 (Severe)")
 
-    st.caption("Powered by DVC, MLflow, Scikit-Learn & Streamlit")
-
-# -----------------------------------------------------------------------------
-# Main Application Tabs
-# -----------------------------------------------------------------------------
-tab_predict, tab_metrics, tab_monitoring = st.tabs([
-    "📱 Live Inference",
-    "📊 Model Lineage & Metrics",
-    "🛡️ Data Drift & Monitoring",
+tab_inference, tab_metrics, tab_monitoring = st.tabs([
+    "🎯 Live Inference",
+    "📊 Model Lineage & Benchmark",
+    "🔬 Data Drift Monitoring",
 ])
 
-# ------------------ TAB 1: PREDICTION ------------------
-with tab_predict:
-    st.header("Mobile Phone Addiction Level Prediction")
+# ------------------ TAB 1: LIVE INFERENCE ------------------
+with tab_inference:
+    st.header("Predict Mobile Addiction Risk")
     st.write(
-        "Provide user digital habits and lifestyle metrics below to receive real-time "
-        "predictions from the production champion model:"
+        "Enter user smartphone usage habits and behavioral metrics. "
+        "The automated pipeline computes the 15 behavioral interaction features in real time."
     )
 
-    if model is None or preprocessor is None:
-        st.error(
-            f"Champion model not found at `{MODEL_PATH}`. "
-            "Please run `dvc repro` to train and generate model artifacts."
-        )
-        st.stop()
+    if model is None:
+        st.error("Champion model not found at `models/model.pkl`. Please execute the training pipeline first.")
+    else:
+        col1, col2, col3 = st.columns(3)
 
-    col1, col2, col3 = st.columns(3)
+        with col1:
+            st.subheader("⏱️ Usage Patterns")
+            daily_usage = st.slider("Daily Usage (Hours)", 0.5, 14.0, 6.0, step=0.25)
+            weekend_usage = st.slider("Weekend Usage (Hours)", 0.5, 16.0, 7.5, step=0.25)
+            screen_before_bed = st.slider("Screen Time Before Bed (Hours)", 0.0, 4.0, 1.2, step=0.1)
+            phone_checks = st.slider("Phone Checks per Day", 10, 200, 85, step=5)
 
-    with col1:
-        st.subheader("👤 Demographics & Screen Time")
-        age = st.slider("Age", min_value=10, max_value=80, value=22, step=1)
-        gender = st.selectbox("Gender", options=["Male", "Female", "Other"])
-        daily_usage = st.slider("Daily Usage (Hours)", min_value=0.0, max_value=14.0, value=5.5, step=0.5)
-        weekend_usage = st.slider("Weekend Usage (Hours)", min_value=0.0, max_value=16.0, value=7.0, step=0.5)
-        screen_before_bed = st.slider("Screen Time Before Bed (Hours)", min_value=0.0, max_value=3.0, value=1.0, step=0.1)
+        with col2:
+            st.subheader("🎮 Activity Breakdown")
+            social_media = st.slider("Time on Social Media (Hours)", 0.0, 8.0, 3.0, step=0.25)
+            gaming = st.slider("Time on Gaming (Hours)", 0.0, 8.0, 1.5, step=0.25)
+            education = st.slider("Time on Education (Hours)", 0.0, 6.0, 1.0, step=0.25)
+            apps_used = st.slider("Apps Used Daily", 2, 35, 14, step=1)
 
-    with col2:
-        st.subheader("📲 Apps & Activities")
-        checks_per_day = st.slider("Phone Checks Per Day", min_value=10, max_value=150, value=75, step=5)
-        apps_used = st.slider("Apps Used Daily", min_value=1, max_value=25, value=12, step=1)
-        purpose = st.selectbox("Primary Purpose", options=["Social Media", "Browsing", "Education", "Gaming", "Other"])
-        time_social = st.slider("Time on Social Media (Hours)", min_value=0.0, max_value=6.0, value=2.5, step=0.25)
-        time_gaming = st.slider("Time on Gaming (Hours)", min_value=0.0, max_value=5.0, value=1.0, step=0.25)
-        time_edu = st.slider("Time on Education (Hours)", min_value=0.0, max_value=4.0, value=1.0, step=0.25)
+        with col3:
+            st.subheader("🧘 Health & Wellbeing")
+            sleep = st.slider("Sleep Duration (Hours)", 3.0, 11.0, 6.5, step=0.25)
+            exercise = st.slider("Daily Exercise (Hours)", 0.0, 4.0, 1.0, step=0.25)
+            anxiety = st.slider("Anxiety Level (1-10)", 1, 10, 5)
+            depression = st.slider("Depression Level (1-10)", 1, 10, 4)
+            self_esteem = st.slider("Self Esteem (1-10)", 1, 10, 6)
 
-    with col3:
-        st.subheader("🧘 Well-being & Lifestyle")
-        sleep_hours = st.slider("Sleep Hours Per Night", min_value=3.0, max_value=11.0, value=6.5, step=0.5)
-        exercise_hours = st.slider("Exercise Hours Per Day", min_value=0.0, max_value=4.0, value=1.0, step=0.25)
-        intellectual_perf = st.slider("Intellectual Performance (50 - 100)", min_value=50, max_value=100, value=75, step=1)
-        social_interactions = st.slider("Social Interactions (1 - 10)", min_value=1, max_value=10, value=5, step=1)
-        family_comm = st.slider("Family Communication (1 - 10)", min_value=1, max_value=10, value=5, step=1)
-        anxiety = st.slider("Anxiety Level (1 - 10)", min_value=1, max_value=10, value=5, step=1)
-        depression = st.slider("Depression Level (1 - 10)", min_value=1, max_value=10, value=5, step=1)
-        self_esteem = st.slider("Self Esteem (1 - 10)", min_value=1, max_value=10, value=6, step=1)
+        if st.button("Predict Addiction Level", type="primary", use_container_width=True):
+            # Raw input dictionary
+            raw_input = {
+                "daily_usage_hours": daily_usage,
+                "weekend_usage_hours": weekend_usage,
+                "screen_time_before_bed": screen_before_bed,
+                "phone_checks_per_day": phone_checks,
+                "time_on_social_media": social_media,
+                "time_on_gaming": gaming,
+                "time_on_education": education,
+                "apps_used_daily": apps_used,
+                "sleep_hours": sleep,
+                "exercise_hours": exercise,
+                "anxiety_level": anxiety,
+                "depression_level": depression,
+                "self_esteem": self_esteem,
+            }
 
-    input_data = pd.DataFrame([{
-        "Age": age,
-        "Daily_Usage_Hours": daily_usage,
-        "Sleep_Hours": sleep_hours,
-        "Interllectual_Performance": intellectual_perf,
-        "Social_Interactions": social_interactions,
-        "Exercise_Hours": exercise_hours,
-        "Anxiety_Level": anxiety,
-        "Depression_Level": depression,
-        "Self_Esteem": self_esteem,
-        "Screen_Time_Before_Bed": screen_before_bed,
-        "Phone_Checks_Per_Day": checks_per_day,
-        "Apps_Used_Daily": apps_used,
-        "Time_on_Social_Media": time_social,
-        "Time_on_Gaming": time_gaming,
-        "Time_on_Education": time_edu,
-        "Family_Communication": family_comm,
-        "Weekend_Usage_Hours": weekend_usage,
-        "Gender": gender,
-        "Phone_Usage_Purpose": purpose,
-    }])
+            # Run through feature engineering
+            input_df = pd.DataFrame([raw_input])
+            engineered_df = engineer_features(input_df)
+            X_input = engineered_df[SELECTED_FEATURES]
 
-    if st.button("Predict Addiction Level", type="primary"):
-        transformed_sample = preprocessor.transform(input_data)
-        raw_pred = float(model.predict(transformed_sample)[0])
-        prediction = max(1.0, min(10.0, round(raw_pred, 2)))
+            # Predict and clamp [1.0, 10.0]
+            raw_pred = model.predict(X_input)[0]
+            pred = float(np.clip(raw_pred, 1.0, 10.0))
 
-        risk_label, risk_color, risk_icon = get_risk_info(prediction)
+            if pred >= 7.5:
+                risk_label = "Severe Addiction Risk"
+                risk_class = "risk-high"
+            elif pred >= 4.5:
+                risk_label = "Moderate Usage Level"
+                risk_class = "risk-mod"
+            else:
+                risk_label = "Healthy / Low Risk"
+                risk_class = "risk-low"
 
-        # Log inference to monitoring database
-        log_inference(input_data, prediction)
+            # Log to production monitoring store
+            log_inference(X_input, pred, risk_level=risk_label)
 
-        st.markdown(f"### Predicted Addiction Level: :{risk_color}[**{prediction:.1f} / 10.0**] ({risk_icon} {risk_label})")
-        st.progress(prediction / 10.0)
+            st.divider()
+            res_col1, res_col2 = st.columns([1, 1])
 
-        res_col_a, res_col_b = st.columns([1, 1])
+            with res_col1:
+                st.markdown(f"### Predicted Addiction Score: **{pred:.2f} / 10.0**")
+                st.markdown(f'<span class="status-badge {risk_class}">{risk_label}</span>', unsafe_allow_html=True)
+                st.progress(float((pred - 1.0) / 9.0))
 
-        with res_col_a:
-            st.subheader("💡 Digital Wellness Recommendations")
-            tips = []
-            if screen_before_bed >= 1.0:
-                tips.append("🌙 **Cut Nighttime Screen Time:** Discontinue phone usage at least 45 minutes before bedtime.")
-            if checks_per_day > 70:
-                tips.append("🔕 **Notification Batching:** Scheduled notification check times to reduce impulse pickups.")
-            if daily_usage > 6.0:
-                tips.append("⏳ **App Limit Timers:** Daily usage exceeds 6 hours. Set timers on social media and gaming apps.")
-            if exercise_hours < 1.0:
-                tips.append("🏃 **Physical Exercise:** Daily exercise elevates mood and reduces screen dependency.")
-            if not tips:
-                tips.append("🌟 **Great Balance:** Current digital habits appear healthy. Keep maintaining this routine!")
-
-            for tip in tips:
-                st.info(tip)
-
-        with res_col_b:
-            st.subheader("📊 Screen Time Breakdown")
-            breakdown_df = pd.DataFrame({
-                "Category": ["Social Media", "Gaming", "Education", "Other Usage"],
-                "Hours": [time_social, time_gaming, time_edu, max(0.0, daily_usage - (time_social + time_gaming + time_edu))]
-            }).set_index("Category")
-            st.bar_chart(breakdown_df)
+            with res_col2:
+                st.markdown("##### Key Behavioral Interaction Indicators")
+                st.write(f"- **Apps × Daily Usage:** `{X_input['apps_x_usage'].values[0]:.1f}`")
+                st.write(f"- **Usage-to-Sleep Ratio:** `{X_input['usage_sleep_ratio'].values[0]:.2f}`")
+                st.write(f"- **Social + Gaming Leisure:** `{X_input['social_gaming_total'].values[0]:.1f} hrs ({X_input['leisure_share'].values[0]*100:.1f}%)`")
+                st.write(f"- **Hourly Check Rate:** `{X_input['checks_per_hour'].values[0]:.1f} checks/hr`")
 
 # ------------------ TAB 2: MODEL LINEAGE & METRICS ------------------
 with tab_metrics:
     st.header("Model Lineage & Multi-Criteria Benchmark")
-    st.write("Champion model performance metrics and validation artifacts generated by the DVC pipeline:")
+    st.write(
+        "Candidate regressors were trained with Optuna hyperparameter optimization and cross-validated. "
+        "The champion model is selected using strict overfitting limits, validation score, and low-latency tie-breaking."
+    )
+
+    comp_csv = PROJECT_ROOT / "reports" / "model_comparison.csv"
+    if comp_csv.exists():
+        comp_df = pd.read_csv(comp_csv)
+        st.dataframe(comp_df, use_container_width=True)
+    elif selection:
+        st.json(selection)
+    else:
+        st.info("Run `dvc repro` to generate comparison metrics.")
 
     if metrics:
-        st.subheader("📋 Evaluation Metrics")
-        metrics_df = pd.DataFrame([metrics]).rename(columns={
-            "r2_score": "R² Score",
-            "rmse": "RMSE",
-            "mae": "MAE",
-            "mse": "MSE",
-        })
-        st.dataframe(metrics_df, use_container_width=True)
-
-    if validation:
-        st.subheader("✅ Data Validation Summary")
-        st.json(validation)
-
-    st.subheader("📈 Diagnostic Plots")
-    p_col1, p_col2 = st.columns(2)
-    feat_img = PLOTS_DIR / "feature_importance.png"
-    actual_pred_img = PLOTS_DIR / "actual_vs_predicted.png"
-    residual_img = PLOTS_DIR / "residuals_distribution.png"
-
-    with p_col1:
-        if feat_img.exists():
-            st.image(str(feat_img), caption="Feature Importance Ranking")
-        if residual_img.exists():
-            st.image(str(residual_img), caption="Residual Error Distribution")
-
-    with p_col2:
-        if actual_pred_img.exists():
-            st.image(str(actual_pred_img), caption="Actual vs Predicted Values")
+        st.subheader("Unseen Test Set Metrics")
+        m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+        m_col1.metric("Test R² Score", f"{metrics.get('test_r2', 0.0):.4f}")
+        m_col2.metric("Mean Absolute Error (MAE)", f"{metrics.get('test_mae', 0.0):.4f}")
+        m_col3.metric("Root Mean Squared Error", f"{metrics.get('test_rmse', 0.0):.4f}")
+        m_col4.metric("Within ±1.0 pt Accuracy", f"{metrics.get('test_accuracy_within_1pt', 0.0)*100:.1f}%")
 
 # ------------------ TAB 3: DATA DRIFT MONITORING ------------------
 with tab_monitoring:
     st.header("Production Data Drift & Quality Monitoring")
     st.write(
-        "Monitoring production inputs against the reference training dataset using the "
-        "**Kolmogorov-Smirnov (KS) two-sample test**."
+        "Production inference requests are continuously evaluated against baseline training distributions "
+        "using the two-sample **Kolmogorov-Smirnov (KS)** statistical hypothesis test."
     )
 
-    col_btn1, col_btn2 = st.columns([1, 4])
+    col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 3])
     with col_btn1:
         run_check = st.button("Run Drift Check", type="primary")
+    with col_btn2:
+        if st.button("Generate Sample Logs"):
+            generate_sample_inferences(n_samples=50, drift=False)
+            st.success("Generated 50 sample production records!")
+            st.rerun()
 
     log_df = load_inference_logs(INFERENCE_LOG_PATH)
     if not log_df.empty:
         st.write(f"**Total production records logged:** `{len(log_df)}`")
 
         if run_check or len(log_df) >= 5:
-            ref_path = REFERENCE_DATA_PATH if REFERENCE_DATA_PATH.exists() else PROJECT_ROOT / "data" / "processed" / "train.csv"
+            ref_path = REFERENCE_DATA_PATH if REFERENCE_DATA_PATH.exists() else PROJECT_ROOT / "data" / "processed" / "X_train.csv"
             if ref_path.exists():
-                ref_df = pd.read_csv(ref_path).drop_duplicates()
+                ref_df = pd.read_csv(ref_path)
                 report = analyze_drift(ref_df, log_df)
 
                 status_color = "red" if report["dataset_drift_detected"] else "green"
                 status_msg = "⚠️ DRIFT DETECTED" if report["dataset_drift_detected"] else "✅ HEALTHY DISTRIBUTION"
 
-                st.markdown(f"#### Status: :{status_color}[{status_msg}]")
+                st.markdown(f"#### Distribution Status: :{status_color}[{status_msg}]")
                 st.write(
                     f"Drifted features: **{report['drifted_features']} / {report['total_features']}** "
                     f"({report['drift_share_pct']}%)"
@@ -361,14 +283,14 @@ with tab_monitoring:
                         "Feature": feat,
                         "Status": "DRIFT ⚠️" if d["drift_detected"] else "HEALTHY ✅",
                         "p-value": round(d["p_value"], 4),
-                        "KS Statistic": round(d.get("ks_statistic", d.get("statistic", 0.0)), 4),
-                        "Reference Mean": round(d.get("reference_mean", 0.0), 2),
+                        "KS Statistic": round(d["ks_statistic"], 4),
+                        "Baseline Mean": round(d.get("reference_mean", 0.0), 2),
                         "Production Mean": round(d.get("current_mean", 0.0), 2),
                         "Mean Shift": round(d.get("mean_shift", 0.0), 2),
                     })
                 st.dataframe(pd.DataFrame(drift_rows), use_container_width=True)
 
-        with st.expander("View Recent Production Logs (Last 10 Requests)"):
+        with st.expander("View Recent Production Logs (Last 10 Inferences)"):
             st.dataframe(log_df.tail(10), use_container_width=True)
     else:
-        st.info("No production inferences logged yet. Head over to the 'Live Inference' tab to submit predictions.")
+        st.info("No production inferences logged yet. Head over to the 'Live Inference' tab to submit predictions or click 'Generate Sample Logs'.")
